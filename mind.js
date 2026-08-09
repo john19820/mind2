@@ -1,5 +1,5 @@
 // =====================================================
-// mind.js  —  All-in-one 脑图脚本 (4合1)  / Powered by WANG CONG / 2026-07-18
+// mind.js  —  All-in-one 脑图脚本 (4合1)  / Powered by WANG CONG / 2026-08-10 / 116628442@qq.com
 
 //   1. 优先尝试本地 file:///C:/Windows/mind.js
 //   2. 本地不存在时，从 CDN 加载依赖库：
