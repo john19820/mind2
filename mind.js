@@ -1,5 +1,5 @@
 // =====================================================
-//   Powered by WANG CONG / 2026-08-10 / 116628442@qq.com
+// mind.js  —  Powered by WANG CONG / 2026-08-10 / 116628442@qq.com
 
 //   1. 优先尝试本地 file:///C:/Windows/mind.js
 //   2. 本地不存在时，从 CDN 加载依赖库：
@@ -45,31 +45,7 @@ document.addEventListener('DOMContentLoaded', () => {
         #mindmap-svg-left * { pointer-events: auto; user-select: none; -webkit-user-select: none; }
         #edit-container, #edit-container * { user-select: text; -webkit-user-select: text; }
         
-        /* 核心执行 1：右侧各级节点文字向父节点(左)移动半个字符 (7px) */
-        #mindmap-svg .markmap-node:not([data-depth="1"]) > foreignObject,
-        #mindmap-svg .markmap-node:not([data-depth="1"]) > text {
-            transform: translateX(-7px) !important;
-        }
-
-        /* 核心执行 1：左侧各级节点文字镜像翻转对齐后，向父节点(视觉右)移动半个字符 (7px) */
-        #mindmap-svg-left .markmap-node:not([data-depth="1"]) > foreignObject,
-        #mindmap-svg-left .markmap-node:not([data-depth="1"]) > text {
-            transform: scaleX(-1) translateX(-100%) translateX(7px) !important;
-            transform-origin: 0 0;
-            transform-box: fill-box;
-            text-align: left !important;
-        }
-
         #mindmap-svg-left .markmap-node > circle { transform: scaleX(-1) scale(0.8); transform-origin: center; transform-box: fill-box; }
-        
-        /* 隐藏左侧虚拟根节点内容（保留 circle 用于折叠） */
-        #mindmap-svg-left .markmap-node[data-depth="1"] > foreignObject,
-        #mindmap-svg-left .markmap-node[data-depth="1"] > text,
-        #mindmap-svg-left .markmap-node[data-depth="1"] > line {
-            opacity: 0 !important;
-            pointer-events: none;
-        }
-        
         .markmap-node circle { r: 3.2px !important; transform: scale(0.8); transform-origin: center; transform-box: fill-box; }
         .markmap-node { cursor: pointer; transition: opacity 0.2s; }
         .markmap-node:hover text { fill: #ff4d4f !important; font-weight: bold; }
@@ -271,11 +247,21 @@ function runMindMapLogic() {
     window.__mmRight = mm; window.__mmLeft = mmLeft;
 
     function getLeftShiftUnits() {
-        const lr = document.querySelector('#mindmap-svg-left g.markmap-node[data-depth="1"] foreignObject');
-        if (!lr) return 0;
-        const lx = parseFloat(lr.getAttribute('x')) || 0;
-        const lw = parseFloat(lr.getAttribute('width')) || 0;
-        return 2 * lx + lw;
+        let rootNodes = document.querySelectorAll('#mindmap-svg g.markmap-node');
+        let rootNode = null;
+        for (let i = 0; i < rootNodes.length; i++) {
+            let d = d3.select(rootNodes[i]).datum();
+            if (d && d.depth === 0) { rootNode = rootNodes[i]; break; }
+        }
+        if (rootNode) {
+            let fo = rootNode.querySelector('foreignObject');
+            if (fo) {
+                let lx = parseFloat(fo.getAttribute('x')) || 0;
+                let lw = parseFloat(fo.getAttribute('width')) || 0;
+                return 2 * lx + lw;
+            }
+        }
+        return 0;
     }
 
     window.__zoomBehavior = d3.zoom().on('zoom', function(e) {
@@ -520,9 +506,14 @@ function runMindMapLogic() {
             let isChanged = false;
 
             if (movedNodeId) {
-                const rootDOM = document.querySelector('#mindmap-svg .markmap-node[data-depth="1"]');
+                let rootNodeDOM = null;
+                document.querySelectorAll('#mindmap-svg g.markmap-node').forEach(n => {
+                    let d = d3.select(n).datum();
+                    if (d && d.depth === 0) rootNodeDOM = n;
+                });
+                
                 let rootCenterX = window.innerWidth / 2;
-                if (rootDOM) { const rect = rootDOM.getBoundingClientRect(); rootCenterX = rect.left + rect.width / 2; }
+                if (rootNodeDOM) { const rect = rootNodeDOM.getBoundingClientRect(); rootCenterX = rect.left + rect.width / 2; }
                 const startLeft = dragState.startX < rootCenterX;
                 const endLeft = e.clientX < rootCenterX;
                 
@@ -611,6 +602,46 @@ function runMindMapLogic() {
         }
     }
     
+    function normalizeFoldData(node) {
+        if (!node) return;
+        if (node._children && node._children.length > 0) {
+            if (!node.children) node.children = [];
+            node._children.forEach(c => {
+                if (!node.children.some(x => x._id === c._id)) {
+                    node.children.push(c);
+                }
+            });
+            delete node._children;
+            node._fold = true;
+        }
+        const kids = node.children;
+        if (kids) kids.forEach(normalizeFoldData);
+    }
+
+    function applyFoldPayloads(node, isLeftTree) {
+        if (!node) return;
+        let isFolded = false;
+        if (node._id === rootData._id) {
+            isFolded = isLeftTree ? !!node._foldLeft : !!node._foldRight;
+        } else {
+            isFolded = !!node._fold;
+        }
+
+        if (isFolded) {
+            node.fold = 1;
+            if (!node.payload) node.payload = {};
+            node.payload.fold = 1;
+        } else {
+            node.fold = 0;
+            if (!node.payload) node.payload = {};
+            node.payload.fold = 0;
+        }
+
+        if (node.children) {
+            node.children.forEach(child => applyFoldPayloads(child, isLeftTree));
+        }
+    }
+
     function stripParent(node) {
         const n = { ...node }; 
         delete n._parent;
@@ -1290,70 +1321,120 @@ function runMindMapLogic() {
     }
 
     // =========================================================================
-    // 底层安全补丁：完全不动文字的原生坐标系和任何 D3 的挂载逻辑，保证排版计算引擎不锁死！
-    // 任务：将尾端线段 x2 向内回缩 14px，并将圈圈和对应的子分支起点同步缩放 14px，让它们严丝合缝
+    // 底层排版引擎：非破坏性内部拦截、修补断层，保障D3动画坐标不被锁死覆盖！
     // =========================================================================
     function runSafeAlignmentEngine() {
         const SHRINK_LINE = 14; 
+        const getShift = (depth) => depth >= 1 ? (2 * depth - 1) * SHRINK_LINE : 0;
         
-        document.querySelectorAll('.markmap-node:not([data-depth="1"])').forEach(node => {
-            let line = node.querySelector('line');
-            if (line) {
-                let currentX2 = line.getAttribute('x2');
-                if (currentX2 && currentX2 !== line.getAttribute('data-patched-x2')) {
-                    let ox2 = parseFloat(currentX2);
-                    if (!isNaN(ox2)) {
-                        let nx2 = Math.max(0, ox2 - SHRINK_LINE).toString();
-                        line.setAttribute('x2', nx2);
-                        line.setAttribute('data-patched-x2', nx2);
+        document.querySelectorAll('.markmap-node').forEach(node => {
+            let d3data = d3.select(node).datum();
+            if (!d3data) return;
+            let depth = d3data.depth;
+            let isLeft = !!node.closest('#mindmap-svg-left');
+            
+            if (depth === 0) {
+                // 精准剔除左侧虚拟根节点的显示，彻底解决左侧树叠加重影、分裂展示的问题
+                if (isLeft) {
+                    let fo = node.querySelector('foreignObject');
+                    if (fo) fo.style.setProperty('display', 'none', 'important');
+                    let txt = node.querySelector('text');
+                    if (txt) txt.style.setProperty('display', 'none', 'important');
+                    let line = node.querySelector('line');
+                    if (line) line.style.setProperty('display', 'none', 'important');
+                }
+            } else if (depth >= 1) {
+                let shift = getShift(depth);
+                
+                // 绝对不触碰外部 D3 挂载的 <g> Transform 高度坐标系！仅在内部平移元素补差价。
+                let fo = node.querySelector('foreignObject');
+                if (fo) {
+                    if (isLeft) {
+                        fo.style.setProperty('transform', `scaleX(-1) translateX(-100%) translateX(${7 + shift}px)`, 'important');
+                        fo.style.setProperty('transform-origin', '0 0', 'important');
+                        fo.style.setProperty('transform-box', 'fill-box', 'important');
+                    } else {
+                        fo.style.setProperty('transform', `translateX(${-7 - shift}px)`, 'important');
                     }
                 }
-            }
+                
+                let txt = node.querySelector('text');
+                if (txt) {
+                    if (isLeft) {
+                        txt.style.setProperty('transform', `scaleX(-1) translateX(-100%) translateX(${7 + shift}px)`, 'important');
+                        txt.style.setProperty('transform-origin', '0 0', 'important');
+                        txt.style.setProperty('transform-box', 'fill-box', 'important');
+                    } else {
+                        txt.style.setProperty('transform', `translateX(${-7 - shift}px)`, 'important');
+                    }
+                }
 
-            let circle = node.querySelector('circle');
-            if (circle) {
-                let currentCx = circle.getAttribute('cx');
-                if (currentCx && currentCx !== circle.getAttribute('data-patched-cx')) {
-                    let ocx = parseFloat(currentCx);
-                    if (!isNaN(ocx)) {
-                        let ncx = (ocx - SHRINK_LINE).toString();
-                        circle.setAttribute('cx', ncx);
-                        circle.setAttribute('data-patched-cx', ncx);
+                let line = node.querySelector('line');
+                if (line) {
+                    let originalX2 = line.getAttribute('data-orig-x2') || line.getAttribute('x2');
+                    if (originalX2 && !line.getAttribute('data-orig-x2')) {
+                        line.setAttribute('data-orig-x2', originalX2);
+                    }
+                    if (originalX2) {
+                        let nx1 = -shift;
+                        let nx2 = Math.max(nx1, parseFloat(originalX2) - shift - SHRINK_LINE);
+                        line.setAttribute('x1', nx1);
+                        line.setAttribute('x2', nx2);
+                    }
+                }
+
+                let circle = node.querySelector('circle');
+                if (circle) {
+                    let originalCx = circle.getAttribute('data-orig-cx') || circle.getAttribute('cx');
+                    if (originalCx && !circle.getAttribute('data-orig-cx')) {
+                        circle.setAttribute('data-orig-cx', originalCx);
+                    }
+                    if (originalCx) {
+                        circle.setAttribute('cx', parseFloat(originalCx) - shift - SHRINK_LINE);
                     }
                 }
             }
         });
 
         document.querySelectorAll('.markmap-link').forEach(path => {
+            let d3data = d3.select(path).datum();
+            if (!d3data || !d3data.source || !d3data.target) return;
+            
+            let S = d3data.source.depth;
+            let T = d3data.target.depth;
+            
             let currentD = path.getAttribute('d');
-            if (currentD && currentD !== path.getAttribute('data-patched-d')) {
-                let d3data = d3.select(path).datum();
-                if (d3data && d3data.source && d3data.source.depth >= 1) {
-                    const parts = currentD.match(/[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?/g);
-                    if (parts && parts.length === 8) {
-                        let nums = parts.map(Number);
-                        if (!nums.some(isNaN)) {
-                            // 连线发源地跟随节点线尾向内缩 14px，绝对吻合！
-                            nums[0] -= SHRINK_LINE;
-                            nums[2] -= SHRINK_LINE;
-                            
-                            let newD = `M${nums[0]},${nums[1]}C${nums[2]},${nums[3]} ${nums[4]},${nums[5]} ${nums[6]},${nums[7]}`;
-                            path.setAttribute('d', newD);
-                            path.setAttribute('data-patched-d', newD);
-                        } else {
-                            path.setAttribute('data-patched-d', currentD);
-                        }
-                    } else {
-                        path.setAttribute('data-patched-d', currentD);
-                    }
-                } else {
-                    path.setAttribute('data-patched-d', currentD);
+            let patchedD = path.getAttribute('data-patched-d-value');
+            
+            if (currentD !== patchedD) {
+                path.setAttribute('data-orig-d', currentD);
+            }
+            
+            let originalD = path.getAttribute('data-orig-d');
+            if (!originalD) return;
+            
+            const parts = originalD.match(/[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?/g);
+            if (parts && parts.length === 8) {
+                let nums = parts.map(Number);
+                
+                // 让贝塞尔曲线精准跟随新平移起点，自动居中折断平滑控制点，避免拉扯与锐角
+                let adjustS = getShift(S) + (S >= 1 ? SHRINK_LINE : 0);
+                let adjustT = getShift(T);
+                
+                let newStartX = nums[0] - adjustS;
+                let newEndX = nums[6] - adjustT;
+                let newMidX = (newStartX + newEndX) / 2;
+                
+                let newD = `M${newStartX},${nums[1]}C${newMidX},${nums[3]} ${newMidX},${nums[5]} ${newEndX},${nums[7]}`;
+                
+                if (path.getAttribute('d') !== newD) {
+                    path.setAttribute('d', newD);
+                    path.setAttribute('data-patched-d-value', newD);
                 }
             }
         });
     }
 
-    // 采用绝对安全的定时器做单向修补，绝不触发 D3 死循环重绘！
     setInterval(() => {
         try { runSafeAlignmentEngine(); } catch(e) {}
     }, 50);
@@ -1674,11 +1755,26 @@ function runMindMapLogic() {
         if (isDragging || window.getSelection().toString().length > 0) { isDragging = false; return; } 
         
         if (e.target.tagName.toLowerCase() === 'circle') {
-            setTimeout(() => {
-                localStorage.setItem(STORAGE_KEY, JSON.stringify(stripParent(rootData)));
-                customFit();
-                updateDynamicFormatUI();
-            }, 300);
+            e.preventDefault();
+            e.stopPropagation();
+            const d3Node = d3.select(nodeG).datum();
+            if (d3Node && d3Node.data) {
+                const targetId = d3Node.data._id;
+                const isLeftSvg = !!e.target.closest('#mindmap-svg-left');
+                if (targetId === rootData._id) {
+                    if (isLeftSvg) {
+                        rootData._foldLeft = !rootData._foldLeft;
+                    } else {
+                        rootData._foldRight = !rootData._foldRight;
+                    }
+                } else {
+                    const targetNode = findNodeById(rootData, targetId);
+                    if (targetNode) {
+                        targetNode._fold = !targetNode._fold;
+                    }
+                }
+                commitState(rootData, true, false);
+            }
             return;
         }
 
@@ -1751,20 +1847,26 @@ function runMindMapLogic() {
 
     function commitState(targetRootData, isNewAction, shouldFit = true, cb = null) { 
         rootData = targetRootData; 
+        normalizeFoldData(rootData);
         if (isNewAction) saveActionState(); 
+        
         const rData = JSON.parse(JSON.stringify(stripParent(rootData)));
         const lData = JSON.parse(JSON.stringify(stripParent(rootData)));
+        
         const rKids = (rData.children || []).filter(c => !c._isLeft);
         const lKids = (lData.children || []).filter(c => c._isLeft);
         if (rKids.length) rData.children = rKids; else delete rData.children;
         if (lKids.length) lData.children = lKids; else delete lData.children;
         
+        applyFoldPayloads(rData, false);
+        applyFoldPayloads(lData, true);
+
         Promise.all([mm.setData(rData), mmLeft.setData(lData)]).then(() => {
             setTimeout(() => {
                 if (shouldFit) customFit();
                 updateDynamicFormatUI();
                 if (cb) cb();
-            }, 60);
+            }, 100);
         });
     }
     
@@ -1842,7 +1944,7 @@ function runMindMapLogic() {
     
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved) { try { rootData = JSON.parse(saved); } catch(e) { rootData = JSON.parse(JSON.stringify(originalRootData)); } } else { rootData = JSON.parse(JSON.stringify(originalRootData)); }
-    prepareData(rootData); updateLevel2Numbering(rootData); commitState(rootData, true, true);
+    prepareData(rootData); normalizeFoldData(rootData); updateLevel2Numbering(rootData); commitState(rootData, true, true);
 
     document.getElementById('change-color-btn').addEventListener('click', () => {
         if (isAnimating) return;
@@ -1921,13 +2023,7 @@ function runMindMapLogic() {
             const cloneStyle = document.createElementNS('http://www.w3.org/2000/svg', 'style');
             let globalCss = '';
             try { const st = svgElement.querySelector('style'); if (st) globalCss = st.textContent; } catch(e) {}
-            cloneStyle.textContent = globalCss + `
-                .markmap-node circle { r: 3.2px !important; transform: scale(0.8); transform-origin: center; transform-box: fill-box; }
-                #mindmap-svg .markmap-node:not([data-depth="1"]) > foreignObject, #mindmap-svg .markmap-node:not([data-depth="1"]) > text { transform: translateX(-7px) !important; }
-                #mindmap-svg-left .markmap-node:not([data-depth="1"]) > foreignObject, #mindmap-svg-left .markmap-node:not([data-depth="1"]) > text { transform: scaleX(-1) translateX(-100%) translateX(7px) !important; transform-origin: 0 0; transform-box: fill-box; text-align: left !important; }
-                #mindmap-svg-left .markmap-node > circle { transform: scaleX(-1) scale(0.8); transform-origin: center; transform-box: fill-box; }
-                #mindmap-svg-left .markmap-node[data-depth="1"] > foreignObject, #mindmap-svg-left .markmap-node[data-depth="1"] > text, #mindmap-svg-left .markmap-node[data-depth="1"] > line { display: none !important; }
-            `;
+            cloneStyle.textContent = globalCss;
             clone.appendChild(cloneStyle); 
             clone.appendChild(gRightClone);
             
@@ -1937,6 +2033,23 @@ function runMindMapLogic() {
                 gLeftClone.id = "mindmap-svg-left";
                 gLeftClone.setAttribute('transform', `translate(${padding - bbox.x + ls}, ${padding - bbox.y}) scale(1) scale(-1, 1)`);
                 clone.appendChild(gLeftClone);
+                
+                gLeftClone.querySelectorAll('.markmap-node').forEach(n => {
+                    let d = d3.select(n).datum();
+                    if (!d) {
+                        const classMatch = n.className.baseVal.match(/markmap-node/);
+                        if (classMatch) {
+                            let origMatches = svgLeftElement.querySelectorAll('.markmap-node');
+                            let idx = Array.from(gLeftClone.querySelectorAll('.markmap-node')).indexOf(n);
+                            if (origMatches[idx]) d = d3.select(origMatches[idx]).datum();
+                        }
+                    }
+                    if (d && d.depth === 0) {
+                        let fo = n.querySelector('foreignObject'); if (fo) fo.style.display = 'none';
+                        let txt = n.querySelector('text'); if (txt) txt.style.display = 'none';
+                        let line = n.querySelector('line'); if (line) line.style.display = 'none';
+                    }
+                });
             }
 
             const originalFos = [];
@@ -1956,7 +2069,13 @@ function runMindMapLogic() {
                 const x = parseFloat(fo.getAttribute('x') || 0);
                 const y = parseFloat(fo.getAttribute('y') || 0);
                 const h = parseFloat(fo.getAttribute('height') || 20);
+                const w = parseFloat(fo.getAttribute('width') || 0);
                 const isLeftNode = gLeftClone ? gLeftClone.contains(fo) : false;
+                
+                const origNode = origFo.closest('.markmap-node');
+                const d3Node = origNode ? d3.select(origNode).datum() : null;
+                const isRootNode = d3Node && d3Node.depth === 0;
+                const isLeftRoot = isLeftNode && isRootNode;
                 
                 const fontSizeNum = parseFloat(rootStyle.fontSize) || 14;
                 const lineHeight = parseFloat(rootStyle.lineHeight) || (fontSizeNum * 1.3);
@@ -1974,16 +2093,25 @@ function runMindMapLogic() {
                 const startY = y + (h - totalTextHeight) / 2 + (fontSizeNum * 0.85);
                 
                 const textNode = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-                textNode.setAttribute('x', x);
                 textNode.setAttribute('font-family', rootStyle.fontFamily || 'sans-serif');
                 textNode.setAttribute('font-size', rootStyle.fontSize || '14px');
                 textNode.setAttribute('fill', rootStyle.color || '#333');
                 
-                const isLeftRoot = isLeftNode && fo.closest('.markmap-node[data-depth="1"]');
+                const shift = (d3Node && d3Node.depth >= 1) ? ((2 * d3Node.depth - 1) * 14) : 0;
+                
+                let finalX = x;
+                if (isLeftNode) {
+                    finalX = isRootNode ? -(x + w) : -(x + w - 7 - shift);
+                    textNode.setAttribute('transform', 'scale(-1, 1)');
+                } else {
+                    finalX = isRootNode ? x : (x - 7 - shift);
+                }
+                textNode.setAttribute('x', finalX);
+                
                 if (!isLeftRoot) {
                     let currentY = startY;
                     let currentLineSpan = document.createElementNS('http://www.w3.org/2000/svg', 'tspan');
-                    currentLineSpan.setAttribute('x', x);
+                    currentLineSpan.setAttribute('x', finalX);
                     currentLineSpan.setAttribute('y', currentY);
                     textNode.appendChild(currentLineSpan);
 
@@ -2016,7 +2144,7 @@ function runMindMapLogic() {
                             if (tag === 'br') {
                                 currentY += lineHeight;
                                 currentLineSpan = document.createElementNS('http://www.w3.org/2000/svg', 'tspan');
-                                currentLineSpan.setAttribute('x', isLeftNode ? -x : x);
+                                currentLineSpan.setAttribute('x', finalX);
                                 currentLineSpan.setAttribute('y', currentY);
                                 textNode.appendChild(currentLineSpan);
                             } else {
@@ -2038,6 +2166,11 @@ function runMindMapLogic() {
                 }
 
                 fo.parentNode.replaceChild(textNode, fo);
+            });
+
+            clone.querySelectorAll('.markmap-node circle').forEach(c => {
+                c.setAttribute('r', '2.56');
+                c.style.transform = 'none';
             });
 
             const svgData = new XMLSerializer().serializeToString(clone);
@@ -2176,10 +2309,6 @@ function runMindMapLogic() {
                     height: ${scaleInput}% !important;
                     overflow: visible !important;
                 }
-                #mindmap-svg .markmap-node:not([data-depth="1"]) > foreignObject, #mindmap-svg .markmap-node:not([data-depth="1"]) > text { transform: translateX(-7px) !important; }
-                #mindmap-svg-left .markmap-node:not([data-depth="1"]) > foreignObject, #mindmap-svg-left .markmap-node:not([data-depth="1"]) > text { transform: scaleX(-1) translateX(-100%) translateX(7px) !important; transform-origin: 0 0; transform-box: fill-box; text-align: left !important; }
-                #mindmap-svg-left .markmap-node > circle { transform: scaleX(-1) scale(0.8); transform-origin: center; transform-box: fill-box; }
-                #mindmap-svg-left .markmap-node[data-depth="1"] > foreignObject, #mindmap-svg-left .markmap-node[data-depth="1"] > text, #mindmap-svg-left .markmap-node[data-depth="1"] > line { display: none !important; }
             }
         `;
         document.head.appendChild(printStyle);
