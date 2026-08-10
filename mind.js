@@ -1,5 +1,5 @@
 // =====================================================
-// Powered by WANG CONG / 2026-08-10 / 116628442@qq.com
+//   By WANG CONG / 2026-08-10 / 116628442@qq.com
 
 //   1. 优先尝试本地 file:///C:/Windows/mind.js
 //   2. 本地不存在时，从 CDN 加载依赖库：
@@ -2317,6 +2317,10 @@ function runMindMapLogic() {
                     height: ${scaleInput}% !important;
                     overflow: visible !important;
                 }
+                #mindmap-svg .markmap-node:not([data-depth="0"]) > foreignObject, #mindmap-svg .markmap-node:not([data-depth="0"]) > text { transform: translateX(-7px) !important; }
+                #mindmap-svg-left .markmap-node:not([data-depth="0"]) > foreignObject, #mindmap-svg-left .markmap-node:not([data-depth="0"]) > text { transform: scaleX(-1) translateX(-100%) translateX(7px) !important; transform-origin: 0 0; transform-box: fill-box; text-align: left !important; }
+                #mindmap-svg-left .markmap-node > circle { transform: scaleX(-1) scale(0.8); transform-origin: center; transform-box: fill-box; }
+                #mindmap-svg-left .markmap-node[data-depth="0"] > foreignObject, #mindmap-svg-left .markmap-node[data-depth="0"] > text, #mindmap-svg-left .markmap-node[data-depth="0"] > line { display: none !important; }
             }
         `;
         document.head.appendChild(printStyle);
