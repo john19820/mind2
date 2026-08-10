@@ -1,5 +1,5 @@
 // =====================================================
-// mind.js  —  Powered by WANG CONG / 2026-08-10 / 116628442@qq.com
+// Powered by WANG CONG / 2026-08-10 / 116628442@qq.com
 
 //   1. 优先尝试本地 file:///C:/Windows/mind.js
 //   2. 本地不存在时，从 CDN 加载依赖库：
@@ -989,7 +989,6 @@ function runMindMapLogic() {
         try {
             const svgEl = document.getElementById('mindmap-svg');
             const nodes = svgEl.querySelectorAll('.markmap-node');
-            const leftNodes = document.getElementById('mindmap-svg-left').querySelectorAll('.markmap-node');
             
             const collect = (nodeList) => {
                 nodeList.forEach(node => {
@@ -999,6 +998,9 @@ function runMindMapLogic() {
                         while (branch.depth > 1 && branch.parent) {
                             branch = branch.parent;
                         }
+                        
+                        if (branch.data && branch.data._isLeft) return;
+                        
                         const branchId = branch.data._id;
                         
                         let textWidth = 0;
@@ -1015,12 +1017,14 @@ function runMindMapLogic() {
                     }
                 });
             };
-            collect(nodes); collect(leftNodes);
+            collect(nodes); 
         } catch(e) {}
         
         if (widestId === null && rootData && rootData.children) {
             let maxScore = -1;
             rootData.children.forEach(branch => {
+                if (branch._isLeft) return;
+                
                 let branchMaxScore = 0;
                 const traverse = (node, depth) => {
                     const visualLen = getMaxVisualLineLen(node.content);
@@ -1038,7 +1042,10 @@ function runMindMapLogic() {
         }
         
         if (widestId === null && rootData && rootData.children && rootData.children.length > 0) {
-            widestId = rootData.children[0]._id;
+            const rightKids = rootData.children.filter(c => !c._isLeft);
+            if (rightKids.length > 0) {
+                widestId = rightKids[0]._id;
+            }
         }
         
         return widestId;
@@ -1216,8 +1223,12 @@ function runMindMapLogic() {
         const widestBranchId = getWidestBranchId();
 
         if (rootData.children) {
-            rootData.children.forEach((child, i) => {
+            let rightIndex = 0;
+            rootData.children.forEach((child) => {
+                if (child._isLeft) return;
+                
                 const id = child._id;
+                rightIndex++;
                 
                 if (id !== widestBranchId) return;
 
@@ -1244,7 +1255,7 @@ function runMindMapLogic() {
                 }
                 
                 const state = window.formatInputState[id];
-                let prefix = cnNum[i + 1] || (i + 1);
+                let prefix = cnNum[rightIndex] || rightIndex;
                 
                 let btnBg = ui.formatBtnBg;
                 let btnColor = ui.formatBtnText;
@@ -1334,7 +1345,6 @@ function runMindMapLogic() {
             let isLeft = !!node.closest('#mindmap-svg-left');
             
             if (depth === 0) {
-                // 精准剔除左侧虚拟根节点的显示，彻底解决左侧树叠加重影、分裂展示的问题
                 if (isLeft) {
                     let fo = node.querySelector('foreignObject');
                     if (fo) fo.style.setProperty('display', 'none', 'important');
@@ -1346,7 +1356,6 @@ function runMindMapLogic() {
             } else if (depth >= 1) {
                 let shift = getShift(depth);
                 
-                // 绝对不触碰外部 D3 挂载的 <g> Transform 高度坐标系！仅在内部平移元素补差价。
                 let fo = node.querySelector('foreignObject');
                 if (fo) {
                     if (isLeft) {
@@ -1417,7 +1426,6 @@ function runMindMapLogic() {
             if (parts && parts.length === 8) {
                 let nums = parts.map(Number);
                 
-                // 让贝塞尔曲线精准跟随新平移起点，自动居中折断平滑控制点，避免拉扯与锐角
                 let adjustS = getShift(S) + (S >= 1 ? SHRINK_LINE : 0);
                 let adjustT = getShift(T);
                 
